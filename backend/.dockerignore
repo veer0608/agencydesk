@@ -1,0 +1,20 @@
+# Keep host build artefacts out of the image: they invalidate the layer cache on
+# every build, and .pyc files compiled by a different Python version are dead
+# weight the container will never load.
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.venv
+venv
+
+# Never bake local configuration or uploaded files into an image.
+.env
+.env.*
+uploads
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+.DS_Store

@@ -1,0 +1,19 @@
+# node_modules must never reach the image.
+#
+# The Dockerfile runs `npm ci` and then `COPY . .`. Without this file, a host
+# checkout that has already been installed on Windows or macOS would copy its
+# platform-specific binaries (esbuild, rollup) straight over the Linux ones the
+# image just installed. docker-compose then seeds the anonymous /srv/node_modules
+# volume from the image, so the container ends up running the wrong platform's
+# esbuild and Vite refuses to start.
+node_modules
+dist
+.vite
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+npm-debug.log*
+*.tsbuildinfo
+.DS_Store

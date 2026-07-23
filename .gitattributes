@@ -1,0 +1,6 @@
+# Keep LF in the repo regardless of who commits from where. entrypoint.sh runs
+# inside a Linux container and CRLF would break its shebang.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary

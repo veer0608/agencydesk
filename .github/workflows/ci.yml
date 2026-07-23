@@ -1,0 +1,85 @@
+name: docker compose up
+
+# Proves the documented setup path actually works: a clean machine, a fresh
+# clone, `docker compose up --build`, and the isolation guarantees holding
+# inside the containers -- not just on a developer's laptop.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  stack:
+    name: Build, seed and prove
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose up --build
+        run: docker compose up --build --detach
+
+      - name: Wait for the API to finish migrating and seeding
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/api/health > /dev/null 2>&1; then
+              echo "API healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::API never became healthy"
+          docker compose logs
+          exit 1
+
+      - name: The seed actually ran
+        run: |
+          # A single agency proves migrations and the seed both completed; two
+          # proves the fixture a reviewer is told to look for is really there.
+          count=$(docker compose exec -T db psql -U agencydesk_owner -d agencydesk \
+                    -tAc "SELECT count(*) FROM agencies")
+          echo "agencies seeded: $count"
+          [ "$count" = "2" ] || { echo "::error::expected 2 agencies, got $count"; exit 1; }
+
+      - name: The API runs as the unprivileged role
+        run: |
+          # If this ever reports agencydesk_owner, every RLS guarantee in the
+          # repo is silently void -- a table owner bypasses its own policies.
+          role=$(docker compose exec -T api python -c \
+            "from sqlalchemy import text; from app.db import engine; \
+             print(engine.connect().execute(text('SELECT current_user')).scalar())")
+          echo "API connects as: $role"
+          [ "$role" = "agencydesk_app" ] || { echo "::error::API is not the app role"; exit 1; }
+          bypass=$(docker compose exec -T db psql -U agencydesk_owner -d agencydesk \
+                     -tAc "SELECT rolbypassrls FROM pg_roles WHERE rolname='agencydesk_app'")
+          [ "$bypass" = "f" ] || { echo "::error::app role can bypass RLS"; exit 1; }
+
+      - name: pytest
+        run: docker compose exec -T api pytest -q
+
+      - name: Prove the five edge cases
+        run: docker compose exec -T api python -m scripts.prove_isolation
+
+      - name: The frontend serves, and proxies to the API
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:5173 > /dev/null 2>&1 && break
+            sleep 5
+          done
+          curl -fsS http://localhost:5173 | grep -q '<div id="root">' \
+            || { echo "::error::frontend did not serve the app shell"; exit 1; }
+          # The proxy is the piece that differs between docker and localhost.
+          curl -fsS http://localhost:5173/api/health | grep -q '"ok"' \
+            || { echo "::error::vite proxy did not reach the API"; exit 1; }
+          echo "frontend serves and proxies correctly"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
